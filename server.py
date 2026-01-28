@@ -170,6 +170,7 @@ class Category(BaseModel):
     user_id: str
     name: str
     description: str = ""
+    parent_id: Optional[str] = None
     color: str = "#06b6d4"
     icon: str = "folder"
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -178,12 +179,14 @@ class Category(BaseModel):
 class CategoryCreate(BaseModel):
     name: str
     description: Optional[str] = ""
+    parent_id: Optional[str] = None
     color: Optional[str] = "#06b6d4"
     icon: Optional[str] = "folder"
 
 class CategoryUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    parent_id: Optional[str] = None
     color: Optional[str] = None
     icon: Optional[str] = None
 
@@ -224,6 +227,12 @@ class ServiceCreate(BaseModel):
     contact_name: Optional[str] = ""
     notes: Optional[str] = ""
     cost: Optional[float] = 0.0
+    software: Optional[str] = ""
+    environment: Optional[str] = ""
+    unit: Optional[str] = ""
+    quantity: Optional[int] = 0
+    license_type: Optional[str] = ""
+    utilized_quantity: Optional[int] = 0
 
 class ServiceUpdate(BaseModel):
     name: Optional[str] = None
@@ -238,6 +247,12 @@ class ServiceUpdate(BaseModel):
     contact_name: Optional[str] = None
     notes: Optional[str] = None
     cost: Optional[float] = None
+    software: Optional[str] = None
+    environment: Optional[str] = None
+    unit: Optional[str] = None
+    quantity: Optional[int] = None
+    license_type: Optional[str] = None
+    utilized_quantity: Optional[int] = None
 
 class Service(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -259,6 +274,12 @@ class Service(BaseModel):
     contact_name: str = ""
     notes: str = ""
     cost: float = 0.0
+    software: str = ""
+    environment: str = ""
+    unit: str = ""
+    quantity: int = 0
+    license_type: str = ""
+    utilized_quantity: int = 0
     status: str = "active"
     notifications_sent: List[str] = []
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -607,7 +628,7 @@ async def get_categories(current_user: dict = Depends(get_current_user)):
     user_categories = await db.categories.find(
         {}, 
         {"_id": 0}
-    ).sort("name", 1).to_list(100)
+    ).sort([("parent_id", 1), ("name", 1)]).to_list(1000)
     
     for cat in user_categories:
         count = await db.services.count_documents({"category_id": cat["id"]})
@@ -623,7 +644,7 @@ async def get_categories_with_services(current_user: dict = Depends(get_current_
     user_categories = await db.categories.find(
         {}, 
         {"_id": 0}
-    ).sort("name", 1).to_list(100)
+    ).sort([("parent_id", 1), ("name", 1)]).to_list(1000)
     
     uncategorized_services = await db.services.find(
         {"$or": [{"category_id": None}, {"category_id": ""}]},
@@ -682,8 +703,7 @@ async def update_category(
 ):
     if db is None: raise HTTPException(status_code=503, detail="Database not ready")
     existing = await db.categories.find_one({
-        "id": category_id,
-        "user_id": current_user["id"]
+        "id": category_id
     }, {"_id": 0})
     
     if not existing:
@@ -992,16 +1012,20 @@ def generate_email_html(settings: dict, title: str, content: str) -> str:
 </html>
     """
 
-async def send_email(to_email: str, subject: str, html_content: str) -> tuple[bool, str]:
+async def send_email(to_email: str, subject: str, html_content: str, override_settings: dict = None) -> tuple[bool, str]:
     global db
     log_debug_email(f"Attempting to send email to {to_email} with subject: {subject}")
-    if db is None: 
-        log_debug_email("DEBUG: db is None in send_email")
-        return False, "Database connection not available"
-    settings = await db.settings.find_one({"id": "app_settings"})
-    if not settings: 
-        log_debug_email("DEBUG: app_settings not found")
-        return False, "App settings not found in database"
+    
+    if override_settings:
+        settings = override_settings
+    else:
+        if db is None: 
+            log_debug_email("DEBUG: db is None in send_email")
+            return False, "Database connection not available"
+        settings = await db.settings.find_one({"id": "app_settings"})
+        if not settings: 
+            log_debug_email("DEBUG: app_settings not found")
+            return False, "App settings not found in database"
     
     sender_email = settings.get("sender_email", "onboarding@resend.dev")
     sender_name = settings.get("sender_name", "Service Renewal Hub")
@@ -1035,8 +1059,8 @@ async def send_email(to_email: str, subject: str, html_content: str) -> tuple[bo
             # SMTP
             host = settings.get("smtp_host")
             port = settings.get("smtp_port", 587)
-            username = settings.get("smtp_username")
-            password = settings.get("smtp_password")
+            username = (settings.get("smtp_username") or "").strip() or None
+            password = (settings.get("smtp_password") or "").strip() or None
             use_tls = settings.get("smtp_use_tls", True)
             
             log_debug_email(f"DEBUG: Using SMTP: {host}:{port} (User: {username}, TLS: {use_tls})")
@@ -1082,6 +1106,25 @@ async def send_email(to_email: str, subject: str, html_content: str) -> tuple[bo
         log_debug_email(f"CRITICAL: Email send failed for {to_email}: {str(e)}")
         logger.error(f"Email send failed for {to_email}: {str(e)}", exc_info=True)
         return False, f"Email send failed: {str(e)}"
+
+@api_router.post("/settings/test-connection")
+async def test_connection(settings: dict, current_user: dict = Depends(get_admin_user)):
+    """Test email settings without saving"""
+    # Force the provider to what's in the payload if checking generic SMTP
+    # or rely on the payload being complete.
+    
+    # We send a test email to the current user
+    success, error_msg = await send_email(
+        current_user["email"],
+        "Test Connection - Service Renewal Hub",
+        "<p>This email confirms your SMTP settings are correct.</p>",
+        override_settings=settings
+    )
+    
+    if not success:
+        raise HTTPException(status_code=400, detail=error_msg)
+    
+    return {"message": "Connection test successful"}
 
 @api_router.post("/settings/test-email")
 async def send_test_email(current_user: dict = Depends(get_admin_user)):
