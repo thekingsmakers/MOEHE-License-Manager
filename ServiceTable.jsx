@@ -131,6 +131,7 @@ const ServiceTable = ({
                   <TableHead className="table-header">Environment</TableHead>
                   <TableHead className="table-header">Provider</TableHead>
                   <TableHead className="table-header">Category</TableHead>
+                  <TableHead className="table-header">Unit</TableHead>
                   <TableHead className="table-header">Licenses</TableHead>
                   <TableHead className="table-header">Expiry Date</TableHead>
                   <TableHead className="table-header">Countdown</TableHead>
@@ -171,11 +172,15 @@ const ServiceTable = ({
                         </Badge>
                       </TableCell>
                       <TableCell>
+                        <Badge variant="outline" className="font-normal text-xs border-dashed">
+                          {service.unit || '-'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
                         <div className="flex items-center text-sm">
                           <span className="font-medium text-foreground">{service.quantity || 0}</span>
                           <span className="text-muted-foreground mx-1">/</span>
                           <span className="text-foreground">{service.utilized_quantity || 0}</span>
-                          {service.unit && <span className="text-xs text-muted-foreground ml-1">({service.unit})</span>}
                         </div>
                       </TableCell>
                       <TableCell className="font-mono text-sm">
